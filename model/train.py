@@ -165,3 +165,5 @@ with torch.no_grad():
 
 print(confusion_matrix(all_labels, all_preds))
 print(classification_report(all_labels, all_preds, target_names=["Non-Recyclable", "Recyclable"]))
+
+torch.save(model.state_dict(), "waste_classifier.pth")
