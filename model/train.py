@@ -9,7 +9,9 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import os
 
-# Binary label mapping
+epochs = 10
+
+#making the binary labels
 class_map = {
     'cardboard': 1,
     'glass': 1,
@@ -19,12 +21,27 @@ class_map = {
     'trash': 0
 }
 
-# Transformations
+#transforms
 transform = transforms.Compose([
     transforms.Resize((64, 64)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.5], std=[0.5])
 ])
+
+train_transform = transforms.Compose([
+    transforms.Resize((64, 64)),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5]*3, std=[0.5]*3)
+])
+
+val_transform = transforms.Compose([
+    transforms.Resize((64, 64)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5]*3, std=[0.5]*3)
+])
+
 
 # Custom dataset with binary labels
 class TrashDataset(datasets.ImageFolder):
@@ -42,7 +59,7 @@ loader = DataLoader(dataset, batch_size=32, shuffle=True)
 
 # Check sample
 images, labels = next(iter(loader))
-print(images.shape, labels[:10])
+#print(images.shape, labels[:10])
 
 # Helper function to show a grid of 8 images
 def imshow(img_batch, labels):
@@ -60,7 +77,7 @@ def imshow(img_batch, labels):
     plt.show()
 
 # Run visualization on first 8 images in your loaded batch
-imshow(images[:8], labels[:8])
+#imshow(images[:8], labels[:8])
 
 
 #create model architecture
@@ -96,7 +113,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = WasteClassifierCNN().to(device)
 
 # Loss and optimizer
-criterion = nn.BCELoss()
+class_imbalance_ratio = (403 + 501 + 410 + 594 + 482) / 137
+pos_weight = torch.tensor([class_imbalance_ratio]).to(device)
+criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 # Split dataset
@@ -107,13 +126,15 @@ train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
 val_loader = DataLoader(val_ds, batch_size=32)
 
 # Training loop
-for epoch in range(10):
+for epoch in range(epochs):
     model.train()
     running_loss = 0.0
-    for images, labels in train_loader:
-        images = images.to(device)
-        labels = labels.float().unsqueeze(1).to(device)
+    correct = 0
+    total = 0
 
+    for images, labels in train_loader:
+        images, labels = images.to(device), labels.to(device).float().unsqueeze(1)
+        
         outputs = model(images)
         loss = criterion(outputs, labels)
 
@@ -122,19 +143,28 @@ for epoch in range(10):
         optimizer.step()
 
         running_loss += loss.item()
-
-    print(f"Epoch [{epoch+1}/10], Loss: {running_loss/len(train_loader):.4f}")
-
-model.eval()
-correct, total = 0, 0
-with torch.no_grad():
-    for images, labels in val_loader:
-        images = images.to(device)
-        labels = labels.float().unsqueeze(1).to(device)
-
-        outputs = model(images)
-        predicted = (outputs > 0.5).float()
-        correct += (predicted == labels).sum().item()
+        predicted = (outputs > 0.5).squeeze(1).long()
+        correct += (predicted == labels.long()).sum().item()
         total += labels.size(0)
 
-print(f"Validation Accuracy: {correct / total:.4f}")
+    avg_loss = running_loss / len(train_loader)
+    accuracy = correct / total
+    print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}")
+
+
+from sklearn.metrics import confusion_matrix, classification_report
+
+all_preds = []
+all_labels = []
+
+model.eval()
+with torch.no_grad():
+    for images, labels in val_loader:
+        images, labels = images.to(device), labels.to(device)
+        outputs = model(images)
+        preds = (outputs > 0.5).squeeze(1).long()
+        all_preds.extend(preds.cpu().numpy())
+        all_labels.extend(labels.cpu().numpy())
+
+print(confusion_matrix(all_labels, all_preds))
+print(classification_report(all_labels, all_preds, target_names=["Non-Recyclable", "Recyclable"]))
